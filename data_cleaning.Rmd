@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, include=FALSE}
 library(tidyverse)
 library(here)
 library(stringr)
@@ -18,9 +18,12 @@ library(lubridate)
 library(leaflet)
 library(maps)
 library(data.table)
+library(paletteer)
+library(cartography)
+library(beeswarm)
 ```
 
-```{r message=FALSE, warning=FALSE, error=FALSE}
+```{r error=FALSE, message=FALSE, warning=FALSE, include=FALSE}
 station_list <- station_list <- read_csv(here("station-list.csv")) %>% 
   janitor::clean_names()
 ```
@@ -74,17 +77,23 @@ test_data <- read_delim(here("data", "ab13_snow_v1.csv"), skip = 14, delim = ","
   mutate(daily_snow_dif = snow_depth_m - snow_depth_lag) %>% 
   mutate(daily_snow_accum = case_when(daily_snow_dif < 0 ~ 0,
                                       daily_snow_dif >= 0 ~ daily_snow_dif)) %>% 
-  mutate(total_snow_wy = cumsum(daily_snow_accum)) %>% 
+  mutate(running_wy_snow_accumulation_m = cumsum(daily_snow_accum)) %>% 
+  mutate(day_of_wy = case_when(as.numeric(month) >= 4 ~ doy + 92,
+                               as.numeric(month) < 4 & year %in% c(2004, 2008, 2012, 2016) ~ doy - 274,
+                               as.numeric(month) < 4 & !year %in% c(2004, 2008, 2012, 2016) ~ doy - 273)) %>% 
   ungroup()
 ```
-```{r}
-ggplot(data = test_data, aes(x = month_name_day, y = total_snow_wy)) +
-  geom_point(aes(color = water_year)) +
-  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01")) +
-  #scale_x_discrete(breaks = c("10-01", "11-01", "12-01", "01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01")) +
-  theme(legend.position = "bottom")
-```
 
+```{r}
+ggplot(data = test_data, aes(x = month_name_day, y = running_wy_snow_accumulation_m)) +
+  geom_point(aes(color = water_year)) +
+  scale_colour_paletteer_d("khroma::smooth_rainbow") +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01")) +
+  #scale_x_discrete(breaks = c("10-01", "11-01", "12-01", "01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01")) +
+  theme(legend.position = "bottom") +
+  labs(title = "total snow accumulation per water year",
+       subtitle = "station p141", x = NULL, y = "total snow (m)", color = "water year")
+```
 
 ```{r}
 test_data2 <- read_delim(here("data", "ab13_snow_v1.csv"), skip = 14, delim = ",", na = c("-99", "NaN", "")) %>% 
@@ -93,13 +102,14 @@ test_data2 <- read_delim(here("data", "ab13_snow_v1.csv"), skip = 14, delim = ",
   #rename(year = number_year) %>% 
 ```
 
+
 ```{r}
 snow_files <- list.files(path = here("data"))
 snow_files[1]
 length(snow_files)
 ```
 
-```{r message=FALSE, warning=FALSE, error=FALSE}
+```{r read files, error=FALSE, message=FALSE, warning=FALSE, include=FALSE}
 source(here("src", "read_snow_files_script.R"))
 snow_data_df = data.frame()
 
@@ -110,10 +120,12 @@ for (i in seq_along(snow_files)) {
 }
 ```
 
-```{r}
+```{r join station data}
 snow_station_data <- snow_data_df %>% 
   left_join(station_list, by = "site_id") %>% 
-  relocate(site_id, site_name, latitude, longitude, state, country, elevation_m, date, year_month, doy, year, water_year, month, day)
+  relocate(site_id, site_name, latitude, longitude, state, country, elevation_m, date, year_month, doy, year, water_year, month, day) %>% 
+  filter(country %in% c("United States", "Canada")) %>% 
+  mutate(site_name = tolower(site_name))
 ```
 
 ```{r}
@@ -128,8 +140,131 @@ write_csv(snow_station_data, file.path(here("snow_station_data.csv")))
 ```
 
 ```{r}
+snow_summary <- snow_station_data %>% 
+  group_by(site_id, water_year) %>% 
+  summarise(total_snow_wy_m = max(running_wy_snow_accumulation_m))
+```
+
+```{r}
+ggplot(data = snow_summary, aes(x = water_year, y = total_snow_wy_m)) +
+  #geom_beeswarm(size = 1) +
+  geom_boxplot(fill = NA) +
+  #scale_x_discrete(labels = c("female","juvenile","male")) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(data = snow_summary, aes(x = water_year, y = total_snow_m)) +
+  geom_jitter(aes(color = water_year)) +
+  theme_minimal()
+```
+
+
+```{r}
 ggplot(data = snow_station_data, aes(x = date, y = snow_depth_m)) +
   geom_point(aes(color = site_id), size = 0.5, show.legend = FALSE)
+```
+
+```{r}
+reso <- snow_station_data %>% 
+  filter(site_id == 'reso') %>% 
+  filter(!water_year %in% c(2002, 2003, 2004, 2005, 2006))
+
+reso_summary <- reso %>% 
+  group_by(month_name_day) %>% 
+  summarise(min_snow_acc = min(running_wy_snow_accumulation_m),
+            max_snow_acc = max(running_wy_snow_accumulation_m),
+            mean_snow_acc = mean(running_wy_snow_accumulation_m)) 
+
+ggplot(data = reso, aes(x = month_name_day, y = running_wy_snow_accumulation_m)) +
+  geom_point(aes(color = water_year), size = 0.5) +
+  scale_colour_paletteer_d("khroma::smooth_rainbow") +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01")) +
+  #scale_x_discrete(breaks = c("10-01", "11-01", "12-01", "01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01")) +
+  theme(legend.position = "bottom") +
+  labs(title = "total snow accumulation per water year",
+       subtitle = "station reso", x = NULL, y = "total snow (m)", color = "water year")
+```
+
+```{r}
+reso_wy_summary <- reso %>% 
+  group_by(water_year) %>% 
+  summarise(total_snow_wy_m = max(running_wy_snow_accumulation_m))
+
+ggplot(data = reso_wy_summary, aes(x = water_year, y = total_snow_wy_m)) +
+  geom_point()
+  theme_minimal()
+```
+
+county_pov$CaliforniaCounty[which.max(county_pov$mean_pov)]
+```{r}
+reso_min_wy <- (reso_wy_summary$water_year[which.min(reso_wy_summary$total_snow_wy_m)])
+reso_max_wy <- (reso_wy_summary$water_year[which.max(reso_wy_summary$total_snow_wy_m)])
+
+reso_year_of_interst <- 2017
+
+reso_yoi <- reso %>% 
+  filter(water_year == year_of_interst)
+reso_min <- reso %>% 
+  filter(water_year == reso_min_wy)
+reso_max <- reso %>% 
+  filter(water_year == reso_max_wy)
+
+reso_stat <- rbind(reso_yoi, reso_min, reso_max)
+
+# reso_stat <- snow_station_data %>% 
+#   filter(site_id == 'reso') %>% 
+#   filter(water_year %in% c(reso_year_of_interst, reso_min_wy, reso_max_wy))
+
+ggplot(data = reso_stat, aes(x = month_name_day, y = running_wy_snow_accumulation_m)) +
+  geom_point(aes(color = water_year), size = 0.5) +
+  geom_point(data = reso_min, aes(x = month_name_day, y = running_wy_snow_accumulation_m, color = water_year)) +
+  #scale_colour_paletteer_d("khroma::smooth_rainbow") +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01")) +
+  theme(legend.position = "bottom") +
+  labs(title = "total snow accumulation per water year",
+       subtitle = "station reso", x = NULL, y = "total snow (m)", color = "water year")
+```
+
+
+
+```{r}
+reso_agerage <- reso %>% 
+  group_by(month_name_day) %>% 
+  summarise(mean_snow_accum = mean(total_snow_wy))
+
+ggplot(data = reso_agerage, aes(x = month_name_day, y = mean_snow_accum)) +
+  geom_col() +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01"))
+```
+```{r}
+reso_2017 <- reso %>% 
+  filter(water_year == '2017')
+
+ggplot(data = reso, aes(x = month_name_day, y = total_snow_wy, group = 1)) +
+  #geom_point(stat = 'summary', fun.y = mean) +
+  stat_summary(fun.y = mean, geom="line", color = 'grey', size = 4) +
+  stat_summary(fun.y = min, geom="line", color = 'yellow', size = 2) +
+  stat_summary(fun.y = max, geom="line", color = 'blue', size = 4) +
+  geom_point(data = reso_2017) +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01"))
+```
+
+```{r}
+ggplot(data = reso_summary, aes(x = month_name_day, y = min_snow_acc)) +
+  geom_point() +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01"))
+
+```
+
+
+```{r}
+ggplot(reso, aes(x = month_day, y = daily_snow_accum)) + geom_line()
+  #scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01"))
+```
+```{r}
+ggplot(reso, aes(x = month_day, y = total_snow_wy)) + geom_line()
+  #scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01"))
 ```
 
 ```{r}
@@ -176,20 +311,89 @@ snow_jan1_2015 <- snow_station_data %>%
   filter(date == ymd('2015-01-01'))
 ```
 
+# leaflet
 ```{r}
 mapStates = map("state", fill = FALSE, plot = FALSE)
 leaflet(data = mapStates) %>% addTiles() %>%
   addPolygons(fillColor = topo.colors(10, alpha = NULL), stroke = FALSE) %>% 
   addCircleMarkers(data = snow_jan1_2015, lat = ~latitude, lng = ~longitude, popup = ~site_id)
 ```
-
-```{r}
+# califonia
+```{r california}
 california <- snow_station_data %>% 
-  filter(state == "CA")
+  filter(state == "CA") %>% 
+  filter(day_of_wy <= 275)
 
 ggplot(data = california, aes(x = date, y = snow_depth_m)) +
   geom_point(aes(color = site_id), size = 0.5)
 ```
+
+```{r}
+write_csv(california, file.path(here("california_snow_data.csv")))
+```
+
+```{r}
+ggplot(data = california, aes(x = day_of_wy, y = running_wy_snow_accumulation_m)) +
+  geom_point(aes(color = water_year), size = .5) +
+  scale_colour_paletteer_d("khroma::smooth_rainbow") +
+  #scale_x_discrete(breaks = c(1, 32, 62, 93, 124, 152, 183, 213, 244, 275),
+                   #labels = c("Oct 1", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 1")) +
+  scale_x_discrete(limits = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01")) +
+scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01")) +
+      #scale_x_discrete(breaks = c("10-01", "11-01", "12-01", "01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01")) +
+      theme(legend.position = "bottom") +
+      labs(title = "total snow accumulation per water year",
+           x = NULL, y = "total snow (m)", color = "water year")
+```
+
+```{r}
+ggplot(data = california, aes(x = month_name_day, y = running_wy_snow_accumulation_m)) +
+  geom_point(aes(color = water_year), size = .5) +
+  scale_colour_paletteer_d("khroma::smooth_rainbow") +
+  #scale_x_discrete(labels = c("1" = "Oct 1", "32" = "Nov 1", "62" = "Dec 1", "93" = "Jan 1", "124" = "Feb 1", "152" = "Mar 1", "183" = "Apr 1", "213" = "May 1", "244" = "Jun 1", "274" = "Jul 1", "336" = "Sep 1")) +
+  #scale_x_discrete(limits = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01")) +
+  scale_x_discrete(breaks = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01", "Aug 01", "Sep 01")) +
+      #scale_x_discrete(breaks = c("10-01", "11-01", "12-01", "01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01")) +
+      theme(legend.position = "bottom") +
+      labs(title = "total snow accumulation per water year",
+           x = NULL, y = "total snow (m)", color = "water year")
+```
+
+```{r}
+#xxx
+babbittpk <- california %>% 
+  filter(site_name == "babbittpk_")
+
+ggplot(data = babbittpk, aes(x = day_of_wy, y = running_wy_snow_accumulation_m)) +
+  geom_line(aes(color = as.factor(water_year)), size = 1) +
+  scale_x_continuous(breaks = c(1, 32, 62, 93, 124, 152, 183, 213, 244, 275),
+                     labels = c("Oct 01", "Nov 01", "Dec 01", "Jan 01", "Feb 01", "Mar 01", "Apr 01", "May 01", "Jun 01", "Jul 01")) +
+  #scale_colour_paletteer_d("khroma::smooth_rainbow") +
+  theme(legend.position = "bottom") +
+  labs(title = "total snow accumulation per water year",
+       x = NULL, y = "total snow (m)", color = "water year")
+```
+
+
+```{r}
+ggplot(data = california, aes(x = doy, y = snow_depth_m)) +
+  geom_point(aes(color = site_id), size = 0.5)
+```
+```{r}
+ggplot(data = california, aes(x = date, y = snow_depth_m)) +
+  geom_line(aes(color = site_id), size = 0.5, show.legend = FALSE)
+```
+
+```{r}
+ggplot(data = california, aes(x = day_of_wy, y = running_wy_snow_accumulation_m)) +
+      geom_point(aes(color = water_year), size = .5) +
+      scale_colour_paletteer_d("khroma::smooth_rainbow") +
+      theme(legend.position = "bottom") +
+      labs(title = "total snow accumulation per water year",
+           x = NULL, y = "total snow (m)", color = "water year")
+```
+
+
 ```{r}
 cali_month <- california %>% 
   group_by(year_month, site_id) %>% 
@@ -218,7 +422,12 @@ p141_wy2012 <- p141 %>%
 
 
 
-** next steps:
+# next steps:
+- summarize total accumulated snow per year see any trends
+- water year accumulation graph of "current" against min, max and median years (stat year identified by year end total)
+- personas (water supply managers and recreationalists)
+- guide recreationalists towards sites near ski resorts
+- story of a shiny app...write up how one particular user found a story by interacting with my shiny app
 - plots and leaflet ideas
 
 
