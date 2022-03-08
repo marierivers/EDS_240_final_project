@@ -429,6 +429,11 @@ p141_wy2012 <- p141 %>%
 - guide recreationalists towards sites near ski resorts
 - story of a shiny app...write up how one particular user found a story by interacting with my shiny app
 - plots and leaflet ideas
+- pick colors for lines based on total snow accumulation or by year
+- figure out how to publish app
+- lookup how to add shapefiles to leaflet (or convert shapefiles to sf)
+- add dropdown to add HUC to leaflet
+- add a snow science tab with dropdowns 
 
 
 
